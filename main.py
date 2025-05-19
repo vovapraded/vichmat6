@@ -57,17 +57,26 @@ def milne(f, x0, y0, xn, h):
     x = np.linspace(x0, xn, n + 1)
     y = np.zeros(n + 1)
     y[0] = y0
-    for i in range(min(3, n)):
+
+    # "Разгон" методом Рунге-Кутты 4-го порядка
+    for i in range(min(4, n)):
         k1 = f(x[i], y[i])
-        k2 = f(x[i] + h / 2, y[i] + h * k1 / 2)
-        k3 = f(x[i] + h / 2, y[i] + h * k2 / 2)
-        k4 = f(x[i] + h, y[i] + h * k3)
-        y[i + 1] = y[i] + (h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
-    for i in range(3, n):
-        y_pred = y[i] + (h / 24) * (55 * f(x[i], y[i]) - 59 * f(x[i - 1], y[i - 1]) +
-                                    37 * f(x[i - 2], y[i - 2]) - 9 * f(x[i - 3], y[i - 3]))
-        y[i + 1] = y[i] + (h / 24) * (9 * f(x[i + 1], y_pred) + 19 * f(x[i], y[i]) -
-                                      5 * f(x[i - 1], y[i - 1]) + f(x[i - 2], y[i - 2]))
+        k2 = f(x[i] + h/2, y[i] + h*k1/2)
+        k3 = f(x[i] + h/2, y[i] + h*k2/2)
+        k4 = f(x[i] + h, y[i] + h*k3)
+        y[i+1] = y[i] + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+    f_vals = [f(x[j], y[j]) for j in range(4)]  # f(x0, y0), ..., f(x3, y3)
+
+    for i in range(4, n+1):
+        # Шаг прогноза
+        y_pred = y[i-4] + (4*h/3)*(2*f_vals[i-3] - f_vals[i-2] + 2*f_vals[i-1])
+        f_pred = f(x[i], y_pred)
+        # Шаг коррекции
+        y_corr = y[i-2] + (h/3)*(f_vals[i-2] + 4*f_vals[i-1] + f_pred)
+        y[i] = y_corr
+        # Добавляем новое значение f для следующей итерации
+        f_vals.append(f(x[i], y[i]))
     return x, y
 
 # --- Оценка точности ---
