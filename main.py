@@ -13,7 +13,7 @@ def ode2(x, y):
     return y * np.sin(x)
 
 def ode2_exact(x, x0, y0):
-    return y0 * np.exp(-np.cos(x0) + np.cos(x))
+    return y0 * np.exp(np.cos(x0) - np.cos(x))
 
 def ode3(x, y):
     return x**2 - y
@@ -54,39 +54,53 @@ def runge_kutta4(f, x0, y0, xn, h):
 
 def milne(f, x0, y0, xn, h):
     n = int(np.round((xn - x0) / h))
-    x = np.linspace(x0, xn, n + 1)
-    y = np.zeros(n + 1)
+    if n < 4:  # Ensure at least 4 intervals for Milne (5 points)
+        n = 4
+        h = (xn - x0) / n
+    n += 1  # Include x0
+    x = np.linspace(x0, xn, n)
+    y = np.zeros(n)
     y[0] = y0
 
-    # "Разгон" методом Рунге-Кутты 4-го порядка
-    for i in range(min(4, n)):
+    # "Startup" with Runge-Kutta 4th order for first 4 points
+    for i in range(min(4, n-1)):
         k1 = f(x[i], y[i])
         k2 = f(x[i] + h/2, y[i] + h*k1/2)
         k3 = f(x[i] + h/2, y[i] + h*k2/2)
         k4 = f(x[i] + h, y[i] + h*k3)
         y[i+1] = y[i] + (h/6)*(k1 + 2*k2 + 2*k3 + k4)
 
+    if n <= 4:  # If too few points, return Runge-Kutta results
+        return x, y
+
+    # Compute initial f values for Milne
     f_vals = [f(x[j], y[j]) for j in range(4)]  # f(x0, y0), ..., f(x3, y3)
 
-    for i in range(4, n+1):
-        # Шаг прогноза
+    # Milne predictor-corrector
+    for i in range(4, n):
+        # Predictor
         y_pred = y[i-4] + (4*h/3)*(2*f_vals[i-3] - f_vals[i-2] + 2*f_vals[i-1])
         f_pred = f(x[i], y_pred)
-        # Шаг коррекции
+        # Corrector
         y_corr = y[i-2] + (h/3)*(f_vals[i-2] + 4*f_vals[i-1] + f_pred)
         y[i] = y_corr
-        # Добавляем новое значение f для следующей итерации
+        # Update f_vals
         f_vals.append(f(x[i], y[i]))
+
     return x, y
 
 # --- Оценка точности ---
 
-def runge_rule(f_method, f, x0, y0, xn, h, order):
-    _, y1 = f_method(f, x0, y0, xn, h)
-    _, y2 = f_method(f, x0, y0, xn, h/2)
-    y2 = y2[::2]
-    runge_est = np.max(np.abs((y2 - y1) / (2**order - 1)))
-    return runge_est
+def runge_rule(method, f, x0, y0, xn, h, order, max_piece_len=1.0):
+
+    if h >= max_piece_len:        # оба шага будут усечены одинаково -> err=0
+        return np.inf             # принудительно уменьшаем шаг
+
+    x1, y1 = solve_in_pieces(method, f, x0, y0, xn, h,  max_piece_len)
+    x2, y2 = solve_in_pieces(method, f, x0, y0, xn, h/2,max_piece_len)
+    y2i = np.interp(x1, x2, y2)
+    return np.max(np.abs((y2i - y1)/(2**order - 1)))
+
 
 def exact_error(x, y_num, y_exact_func, x0, y0):
     y_exact = y_exact_func(x, x0, y0)
@@ -94,23 +108,32 @@ def exact_error(x, y_num, y_exact_func, x0, y0):
 
 # --- Автоматический подбор шага ---
 
-def auto_method(method, f, x0, y0, xn, eps, f_exact=None, is_runge=False, order=1, h_start=0.25):
+def auto_method(method, f, x0, y0, xn, eps,
+                f_exact=None, is_runge=False, order=1, h_start=0.25,
+                max_piece_len=1.0):
     h = h_start
     h_min = 1e-6
-    max_iter = 20
-    for _ in range(max_iter):
-        x, y = method(f, x0, y0, xn, h)
+    for _ in range(25):
         if is_runge:
-            err = runge_rule(method, f, x0, y0, xn, h, order)
+            err = runge_rule(method, f, x0, y0, xn, h, order, max_piece_len)
         else:
-            err, _ = exact_error(x, y, f_exact, x0, y0)
+            x_tmp, y_tmp = method(f, x0, y0, xn, h)
+            err, _ = exact_error(x_tmp, y_tmp, f_exact, x0, y0)
+
         if err <= eps:
-            return x, y, h, err
+            x, y = solve_in_pieces(method, f, x0, y0, xn, h, max_piece_len)
+            return x, y, h, err  # Добавляем h в возвращаемые значения
+
         h /= 2
         if h < h_min:
             print("Внимание: минимальный шаг достигнут!")
-            break
-    return x, y, h, err
+            x, y = solve_in_pieces(method, f, x0, y0, xn, h, max_piece_len)
+            return x, y, h, err  # Добавляем h в возвращаемые значения
+
+    # Fallback
+    x, y = solve_in_pieces(method, f, x0, y0, xn, h, max_piece_len)
+    return x, y, h, err  # Добавляем h в возвращаемые значения
+
 
 def input_float(prompt, min_value=None):
     while True:
@@ -122,6 +145,28 @@ def input_float(prompt, min_value=None):
             return val
         except ValueError:
             print("Некорректный ввод, попробуйте еще раз.")
+
+def solve_in_pieces(method, f, x0, y0, xn, h, max_piece_len=1.0):
+
+    if method.__name__ == 'milne':
+        return method(f, x0, y0, xn, h)          # единый прогон
+
+    n_pieces = int(np.ceil((xn - x0) / max_piece_len))
+    edges = np.linspace(x0, xn, n_pieces + 1)
+
+    xs, ys = [x0], [y0]
+    y_cur = y0
+    for left, right in zip(edges[:-1], edges[1:]):
+        loc_h = h if h < (right - left) else (right - left)
+        x_piece, y_piece = method(f, left, y_cur, right, loc_h)
+        xs.extend(x_piece[1:])                   # без первой дублирующейся точки
+        ys.extend(y_piece[1:])
+        y_cur = y_piece[-1]
+
+    return np.array(xs), np.array(ys)
+
+
+
 
 def main():
     print("Численное решение ОДУ. Выберите уравнение:")
